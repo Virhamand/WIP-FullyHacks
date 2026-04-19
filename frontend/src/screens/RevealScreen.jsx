@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 
-export default function RevealScreen({ question, round, answers, selectedLabel, onSelect }) {
+export default function RevealScreen({ question, round, answers, onSelect }) {
   const [timeLeft, setTimeLeft] = useState(20);
+  const [pendingLabel, setPendingLabel] = useState(null);
   const [submitted, setSubmitted] = useState(false);
 
   useEffect(() => {
@@ -13,11 +14,10 @@ export default function RevealScreen({ question, round, answers, selectedLabel, 
 
   const progress = (timeLeft / 20) * 100;
 
-  const handleSelect = (label) => {
-    if (!submitted) {
-      onSelect(label);
-      setSubmitted(true);
-    }
+  const handleConfirm = () => {
+    if (!pendingLabel || submitted) return;
+    onSelect(pendingLabel);
+    setSubmitted(true);
   };
 
   return (
@@ -38,14 +38,11 @@ export default function RevealScreen({ question, round, answers, selectedLabel, 
         {/* Timer bar */}
         <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden">
           <div
-            className={`h-full transition-all ${
-              timeLeft <= 8 ? 'bg-red-500' : 'bg-lime-400'
-            }`}
+            className={`h-full transition-all duration-1000 ${timeLeft <= 8 ? 'bg-red-500' : 'bg-lime-400'}`}
             style={{ width: `${progress}%` }}
           />
         </div>
 
-        
         {/* Question */}
         {question && (
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-5">
@@ -63,7 +60,7 @@ export default function RevealScreen({ question, round, answers, selectedLabel, 
             </p>
           </div>
           <p className="text-sm text-slate-400">
-            Tap the answer you think was written by the AI. This isn't a vote yet.
+            Select the answer you think was written by the AI, then confirm.
           </p>
         </div>
 
@@ -72,12 +69,13 @@ export default function RevealScreen({ question, round, answers, selectedLabel, 
           {answers.map(({ label, text }) => (
             <button
               key={label}
-              onClick={() => handleSelect(label)}
+              onClick={() => !submitted && setPendingLabel(label)}
+              disabled={submitted}
               className={`w-full text-left p-5 rounded-lg border transition-all ${
-                selectedLabel === label
+                pendingLabel === label
                   ? 'border-lime-400 bg-lime-400 bg-opacity-10'
                   : 'border-slate-700 bg-slate-800 hover:border-slate-600'
-              }`}
+              } disabled:cursor-default`}
             >
               <p className="text-xs font-mono tracking-widest text-slate-400 uppercase mb-2">
                 Answer {label}
@@ -89,18 +87,15 @@ export default function RevealScreen({ question, round, answers, selectedLabel, 
           ))}
         </div>
 
-        {/* Submit button */}
-        {!submitted && (
+        {!submitted ? (
           <button
-            onClick={() => handleSelect(selectedLabel)}
-            disabled={!selectedLabel}
+            onClick={handleConfirm}
+            disabled={!pendingLabel}
             className="w-full bg-lime-400 text-slate-900 py-3 px-6 rounded-lg font-bold hover:bg-lime-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             Confirm suspicion
           </button>
-        )}
-
-        {submitted && (
+        ) : (
           <div className="text-center py-4">
             <p className="text-sm font-mono text-slate-400 animate-pulse">
               Suspicion sent — waiting for round to end...

@@ -16,20 +16,35 @@ export default function LobbyScreen({ roomCode, players, isHost, onStart }) {
           </div>
         </div>
 
-        {/* Player count */}
+        {/* Players joined */}
         <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 space-y-4">
-          <p className="text-xs font-mono tracking-widest text-slate-400 uppercase">
-            Players joined
-          </p>
-          <div className="text-center">
-            <div className="text-5xl font-black text-lime-400 mb-2">{players.length}</div>
-            <p className="text-slate-400">/ 2 players</p>
+          <div className="flex items-baseline justify-between">
+            <p className="text-xs font-mono tracking-widest text-slate-400 uppercase">
+              Players joined
+            </p>
+            <span className="text-sm font-mono text-slate-400">{players.length} / 2</span>
           </div>
-          {!ready && (
-            <div className="text-xs font-mono text-slate-500 text-center mt-4 animate-pulse">
-              waiting for second player...
-            </div>
-          )}
+
+          <div className="space-y-2 min-h-[4rem]">
+            {players.map((player, i) => (
+              <div
+                key={player.id}
+                className="flex items-center gap-3 py-2 border-b border-slate-700 last:border-0"
+              >
+                <div className="w-2 h-2 rounded-full bg-lime-400" />
+                <span className="font-semibold">{player.name}</span>
+                {i === 0 && (
+                  <span className="ml-auto text-xs font-mono text-slate-500">host</span>
+                )}
+              </div>
+            ))}
+            {players.length < 2 && (
+              <div className="flex items-center gap-3 py-2">
+                <div className="w-2 h-2 rounded-full bg-slate-600 animate-pulse" />
+                <span className="text-sm text-slate-500 animate-pulse">waiting for player 2...</span>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Start button */}

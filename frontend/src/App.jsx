@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import HomeScreen from './screens/HomeScreen';
 import CreateRoomScreen from './screens/CreateRoomScreen';
@@ -16,8 +16,8 @@ export default function App() {
   const [socket, setSocket] = useState(null);
   const [screen, setScreen] = useState('home');
   const [toast, setToast] = useState('');
+  const isHostRef = useRef(false);
 
-  // Game state
   const [gameState, setGameState] = useState({
     roomCode: null,
     playerId: null,
@@ -32,27 +32,28 @@ export default function App() {
     selectedLabel: null,
     selectedVoteId: null,
     timeLeft: 0,
+    winner: null,
+    aiPlayerId: null,
+    votes: [],
   });
 
-  // Initialize socket
   useEffect(() => {
     const newSocket = io(SERVER_URL);
     setSocket(newSocket);
-
     return () => newSocket.disconnect();
   }, []);
 
-  // Socket event listeners
   useEffect(() => {
     if (!socket) return;
 
     socket.on('room_created', ({ roomCode, playerId }) => {
-      setGameState(prev => ({
-        ...prev,
-        roomCode,
-        playerId,
-        isHost: true,
-      }));
+      isHostRef.current = true;
+      setGameState(prev => ({ ...prev, roomCode, playerId, isHost: true }));
+      setScreen('lobby');
+    });
+
+    socket.on('room_joined', ({ roomCode, playerId }) => {
+      setGameState(prev => ({ ...prev, roomCode, playerId, isHost: false }));
       setScreen('lobby');
     });
 
@@ -65,11 +66,8 @@ export default function App() {
       showToast(msgs[reason] || 'Could not join.');
     });
 
-    socket.on('lobby_update', ({ players, ready }) => {
+    socket.on('lobby_update', ({ players }) => {
       setGameState(prev => ({ ...prev, players }));
-      if (ready && gameState.isHost) {
-        // Enable start button
-      }
     });
 
     socket.on('round_start', ({ round, question, timeLimit }) => {
@@ -79,6 +77,7 @@ export default function App() {
         question,
         answers: [],
         selectedLabel: null,
+        timeLeft: timeLimit ?? 30,
       }));
       setScreen('question');
     });
@@ -93,17 +92,16 @@ export default function App() {
     });
 
     socket.on('pointing_update', ({ points }) => {
-      // Live update of who's pointing at what
       setGameState(prev => ({ ...prev, points }));
     });
 
-    socket.on('round_end', ({ reveal, nextState }) => {
+    socket.on('round_end', ({ reveal }) => {
       setGameState(prev => ({ ...prev, revealMap: reveal }));
       setScreen('round-end');
     });
 
     socket.on('voting_start', ({ timeLimit }) => {
-      setGameState(prev => ({ ...prev, selectedVoteId: null }));
+      setGameState(prev => ({ ...prev, selectedVoteId: null, timeLeft: timeLimit ?? 20 }));
       setScreen('voting');
     });
 
@@ -112,7 +110,7 @@ export default function App() {
         ...prev,
         winner,
         aiPlayerId,
-        votes,
+        votes: votes ?? [],
       }));
       setScreen('gameover');
     });
@@ -124,6 +122,8 @@ export default function App() {
     socket.on('error', ({ message }) => {
       showToast(message);
     });
+
+    return () => socket.removeAllListeners();
   }, [socket]);
 
   const showToast = (msg) => {
@@ -160,6 +160,7 @@ export default function App() {
   };
 
   const handlePlayAgain = () => {
+    isHostRef.current = false;
     setGameState({
       roomCode: null,
       playerId: null,
@@ -174,20 +175,22 @@ export default function App() {
       selectedLabel: null,
       selectedVoteId: null,
       timeLeft: 0,
+      winner: null,
+      aiPlayerId: null,
+      votes: [],
     });
     setScreen('home');
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white overflow-hidden">
-      {/* Background noise */}
-      <div className="fixed inset-0 opacity-5 pointer-events-none mix-blend-overlay" 
+      <div
+        className="fixed inset-0 opacity-5 pointer-events-none mix-blend-overlay"
         style={{
-          backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\"0 0 256 256\" xmlns=\"http://www.w3.org/2000/svg\"%3E%3Cfilter id=\"n\"%3E%3CfeTurbulence type=\"fractalNoise\" baseFrequency=\"0.9\" numOctaves=\"4\" stitchTiles=\"stitch\"/%3E%3C/filter%3E%3Crect width=\"100%25\" height=\"100%25\" filter=\"url(%23n)\" opacity=\"0.04\"/%3E%3C/svg%3E")',
+          backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 256 256\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'n\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23n)\' opacity=\'0.04\'/%3E%3C/svg%3E")',
         }}
       />
 
-      {/* Screen routing */}
       {screen === 'home' && <HomeScreen onNavigate={setScreen} />}
       {screen === 'create' && <CreateRoomScreen onCreate={handleCreateRoom} onBack={() => setScreen('home')} />}
       {screen === 'join' && <JoinRoomScreen onJoin={handleJoinRoom} onBack={() => setScreen('home')} />}
@@ -203,6 +206,7 @@ export default function App() {
         <QuestionScreen
           round={gameState.round}
           question={gameState.question}
+          timeLimit={gameState.timeLeft}
           onSubmit={handleSubmitAnswer}
         />
       )}
@@ -224,7 +228,9 @@ export default function App() {
       {screen === 'voting' && (
         <VotingScreen
           players={gameState.players}
+          playerId={gameState.playerId}
           selectedVoteId={gameState.selectedVoteId}
+          timeLimit={gameState.timeLeft}
           onVote={handleSubmitVote}
         />
       )}
@@ -238,7 +244,6 @@ export default function App() {
         />
       )}
 
-      {/* Toast notification */}
       {toast && (
         <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-700 px-6 py-3 rounded-lg text-sm font-mono border border-slate-600">
           {toast}
