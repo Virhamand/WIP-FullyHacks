@@ -17,13 +17,27 @@ export default function QuestionScreen({ round, question, onSubmit }) {
   // Word count
   useEffect(() => {
     const count = answer.trim() === '' ? 0 : answer.trim().split(/\s+/).length;
-    setWordCount(Math.min(count, 40));
+    setWordCount(count);
   }, [answer]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!answer.trim()) return;
-    onSubmit(answer.trim());
+    const trimmed = answer.trim();
+    if (!trimmed) return;
+
+    const wordCount = trimmed.split(/\s+/).length;
+    
+    if (wordCount < 5) {
+      alert("Answer must be at least 5 words");
+      return;
+    }
+    
+    if (wordCount > 40) {
+      alert("Answer must be at most 40 words");
+      return;
+    }
+
+    onSubmit(trimmed);
     setSubmitted(true);
   };
 
@@ -87,7 +101,7 @@ export default function QuestionScreen({ round, question, onSubmit }) {
             />
             <div className="flex justify-between items-center">
               <p className="text-xs font-mono text-slate-400">
-                {wordCount} / 40 words
+                Word must be between 5-40 words: {wordCount} / 40
               </p>
               <button
                 type="submit"

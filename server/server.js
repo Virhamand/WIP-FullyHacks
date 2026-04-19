@@ -109,7 +109,7 @@ async function generateAiAnswer(question) {
 
   try {
    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: {
@@ -120,7 +120,7 @@ async function generateAiAnswer(question) {
             {
               parts: [
                 {
-                  text: `You are a player in a spot in the imposter game in which you are trying to figure out which player among the other players are ai. Use 1 sentence. write towards the shorter side. no emojis. Use informal and imperfect grammar.
+                  text: `You are a player in a spot in the imposter game in which you are trying to figure out which player among the other players are ai. Use 1 sentence. write towards the shorter side. no emojis. Use informal and imperfect grammar. Avoid the use of terms such as "man", "honestly".
 
 question_example: do you have any regrets?
 example1: Plenty but honestly why waste energy on stuff you can't change
@@ -356,7 +356,6 @@ io.on("connection", (socket) => {
   });
 
   // -- ROUND: ANSWER --
-
   socket.on("submit_answer", ({ roomCode, text }) => {
     const room = getRoom(roomCode);
     if (!room || room.state !== "answering") return;
@@ -365,8 +364,20 @@ io.on("connection", (socket) => {
     const alreadyAnswered = room.answers.some((a) => a.playerId === playerId);
     if (alreadyAnswered) return;
 
-    // Enforce word limit (40 words)
-    const trimmed = text.trim().split(/\s+/).slice(0, 40).join(" ");
+    // Enforce word limit (5-40 words)
+    const trimmed = text.trim();
+    const words = trimmed.split(/\s+/);
+    
+    if (words.length < 5) {
+        socket.emit("answer_error", { message: "Answer must be at least 5 words" });
+        return;
+    }
+    
+    if (words.length > 40) {
+        socket.emit("answer_error", { message: "Answer must be at most 40 words" });
+        return;
+    }
+
     room.answers.push({ playerId, text: trimmed });
 
     console.log(`[submit_answer] ${playerId} in ${roomCode}`);
