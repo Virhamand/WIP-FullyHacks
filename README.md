@@ -1,3 +1,8 @@
+How to run:
+run 'node test.js' in one terminal. that starts the server
+open another ternimal and run 'npx serve .' it runs the ui. clock on the wiphacks folder to see ui and play
+
+
 🎭 Imposter Game (AI vs Humans)
 
 A real-time social deduction game where players try to identify the AI imposter hidden among them.
