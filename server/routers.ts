@@ -1,0 +1,401 @@
+import { TRPCError } from "@trpc/server";
+import { nanoid } from "nanoid";
+import { z } from "zod";
+import { AVATARS, QUESTION_BANK, TOTAL_ROUNDS } from "../shared/game";
+import { COOKIE_NAME } from "@shared/const";
+import { getSessionCookieOptions } from "./_core/cookies";
+import { invokeLLM } from "./_core/llm";
+import { systemRouter } from "./_core/systemRouter";
+import { publicProcedure, router } from "./_core/trpc";
+import {
+  addPlayerToRoom,
+  createGameRoom,
+  createGameRound,
+  getCurrentRound,
+  getFullGameState,
+  getGameRoomByCode,
+  getPlayersInRoom,
+  getPlayerBySession,
+  getAnswersForRound,
+  getPointingsForRound,
+  getVotesForRoom,
+  hasPlayerAnswered,
+  hasPlayerPointed,
+  hasPlayerVoted,
+  submitAnswer,
+  submitPointing,
+  submitVote,
+  updateGameRoomStatus,
+  updateRoundStatus,
+} from "./db";
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function pickRandomItems<T>(arr: readonly T[], count: number): T[] {
+  const shuffled = [...arr].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, count);
+}
+
+function generateRoomCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+}
+
+function getAvatarByKey(key: string) {
+  return AVATARS.find((a) => a.key === key) ?? AVATARS[0];
+}
+
+// ─── Router ───────────────────────────────────────────────────────────────────
+
+export const appRouter = router({
+  system: systemRouter,
+
+  auth: router({
+    me: publicProcedure.query((opts) => opts.ctx.user),
+    logout: publicProcedure.mutation(({ ctx }) => {
+      const cookieOptions = getSessionCookieOptions(ctx.req);
+      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+      return { success: true } as const;
+    }),
+  }),
+
+  game: router({
+    // Create a new game room
+    createRoom: publicProcedure.mutation(async () => {
+      const roomCode = generateRoomCode();
+      const avatarKeys = AVATARS.map((a) => a.key);
+      const aiAvatarKey = avatarKeys[Math.floor(Math.random() * avatarKeys.length)]!;
+      const aiAvatar = getAvatarByKey(aiAvatarKey);
+      const aiPlayerId = `ai_${nanoid(8)}`;
+
+      const room = await createGameRoom({
+        roomCode,
+        aiPlayerId,
+        aiAvatarKey,
+        aiName: aiAvatar.name,
+      });
+
+      return { roomCode: room.roomCode, roomId: room.id };
+    }),
+
+    // Join a room with a player name
+    joinRoom: publicProcedure
+      .input(
+        z.object({
+          roomCode: z.string().min(4).max(8),
+          playerName: z.string().min(1).max(30),
+          sessionId: z.string().min(8),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const room = await getGameRoomByCode(input.roomCode.toUpperCase());
+        if (!room) throw new TRPCError({ code: "NOT_FOUND", message: "Room not found" });
+        if (room.status !== "lobby") throw new TRPCError({ code: "BAD_REQUEST", message: "Game already started" });
+
+        const existingPlayers = await getPlayersInRoom(room.id);
+
+        // Check if session already joined
+        const existing = existingPlayers.find((p) => p.sessionId === input.sessionId);
+        if (existing) {
+          return { player: existing, room };
+        }
+
+        if (existingPlayers.length >= 2) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Room is full" });
+        }
+
+        // Assign avatar — avoid AI avatar and already-taken avatars
+        const takenKeys = new Set([room.aiAvatarKey, ...existingPlayers.map((p) => p.avatarKey)]);
+        const available = AVATARS.filter((a) => !takenKeys.has(a.key));
+        const avatarKey = available.length > 0 ? available[Math.floor(Math.random() * available.length)]!.key : AVATARS[0]!.key;
+
+        const player = await addPlayerToRoom({
+          roomId: room.id,
+          sessionId: input.sessionId,
+          playerName: input.playerName.toUpperCase(),
+          avatarKey,
+        });
+
+        return { player, room };
+      }),
+
+    // Get full game state (polling endpoint)
+    getState: publicProcedure
+      .input(z.object({ roomCode: z.string(), sessionId: z.string() }))
+      .query(async ({ input }) => {
+        const state = await getFullGameState(input.roomCode.toUpperCase());
+        if (!state) throw new TRPCError({ code: "NOT_FOUND", message: "Room not found" });
+
+        const { room, players, rounds, allAnswers, allPointings, votes } = state;
+
+        // Build participant list (humans + AI)
+        const aiParticipant = {
+          id: room.aiPlayerId,
+          name: room.aiName,
+          avatarKey: room.aiAvatarKey,
+          isAi: true,
+        };
+
+        const humanParticipants = players.map((p) => ({
+          id: p.sessionId,
+          name: p.playerName,
+          avatarKey: p.avatarKey,
+          isAi: false,
+        }));
+
+        // Current round data
+        const currentRound = rounds.find((r) => r.roundNumber === room.currentRound) ?? null;
+        const currentAnswers = currentRound ? allAnswers[currentRound.id] ?? [] : [];
+        const currentPointings = currentRound ? allPointings[currentRound.id] ?? [] : [];
+
+        // Determine if current player has answered/pointed/voted
+        const myPlayer = players.find((p) => p.sessionId === input.sessionId);
+        const myAnswered = currentRound ? await hasPlayerAnswered(currentRound.id, input.sessionId) : false;
+        const myPointed = currentRound ? await hasPlayerPointed(currentRound.id, input.sessionId) : false;
+        const myVoted = await hasPlayerVoted(room.id, input.sessionId);
+
+        // Shuffle answers for display (hide who is AI until results)
+        const answersForDisplay = currentAnswers.map((a) => ({
+          authorId: a.authorId,
+          answerText: a.answerText,
+          // Only reveal isAi on results screen
+          isAi: room.status === "results" ? a.isAi : false,
+        }));
+
+        // For pointing display, include all rounds' pointings
+        const allRoundsPointings = rounds.map((r) => ({
+          roundNumber: r.roundNumber,
+          question: r.question,
+          answers: (allAnswers[r.id] ?? []).map((a) => ({
+            authorId: a.authorId,
+            answerText: a.answerText,
+            isAi: room.status === "results" ? a.isAi : false,
+          })),
+          pointings: (allPointings[r.id] ?? []).map((p) => ({
+            pointerId: p.pointerId,
+            suspectId: p.suspectId,
+            explanation: p.explanation,
+          })),
+        }));
+
+        return {
+          room: {
+            id: room.id,
+            roomCode: room.roomCode,
+            status: room.status,
+            currentRound: room.currentRound,
+            aiPlayerId: room.status === "results" ? room.aiPlayerId : null, // only reveal on results
+          },
+          participants: [...humanParticipants, aiParticipant],
+          humanParticipants,
+          aiParticipant,
+          currentRound: currentRound
+            ? {
+                id: currentRound.id,
+                roundNumber: currentRound.roundNumber,
+                question: currentRound.question,
+                status: currentRound.status,
+              }
+            : null,
+          answers: answersForDisplay,
+          pointings: currentPointings.map((p) => ({
+            pointerId: p.pointerId,
+            suspectId: p.suspectId,
+            explanation: p.explanation,
+          })),
+          votes: votes.map((v) => ({
+            voterId: v.voterId,
+            suspectId: v.suspectId,
+            explanation: v.explanation,
+          })),
+          allRoundsPointings,
+          myPlayer: myPlayer ?? null,
+          myAnswered,
+          myPointed,
+          myVoted,
+          playerCount: players.length,
+        };
+      }),
+
+    // Start the game (first player who joined starts it when 2 players are ready)
+    startGame: publicProcedure
+      .input(z.object({ roomCode: z.string(), sessionId: z.string() }))
+      .mutation(async ({ input }) => {
+        const room = await getGameRoomByCode(input.roomCode.toUpperCase());
+        if (!room) throw new TRPCError({ code: "NOT_FOUND", message: "Room not found" });
+        if (room.status !== "lobby") throw new TRPCError({ code: "BAD_REQUEST", message: "Game already started" });
+
+        const players = await getPlayersInRoom(room.id);
+        if (players.length < 2) throw new TRPCError({ code: "BAD_REQUEST", message: "Need 2 players to start" });
+
+        // Pick 3 random questions
+        const questions = pickRandomItems(QUESTION_BANK, TOTAL_ROUNDS);
+
+        // Create all 3 rounds
+        for (let i = 0; i < TOTAL_ROUNDS; i++) {
+          await createGameRound({
+            roomId: room.id,
+            roundNumber: i + 1,
+            question: questions[i]!,
+          });
+        }
+
+        await updateGameRoomStatus(room.id, "question", 1);
+        return { success: true };
+      }),
+
+    // Submit an answer for the current round
+    submitAnswer: publicProcedure
+      .input(
+        z.object({
+          roomCode: z.string(),
+          sessionId: z.string(),
+          answerText: z.string().min(1).max(5000),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const room = await getGameRoomByCode(input.roomCode.toUpperCase());
+        if (!room) throw new TRPCError({ code: "NOT_FOUND", message: "Room not found" });
+        if (room.status !== "question") throw new TRPCError({ code: "BAD_REQUEST", message: "Not in question phase" });
+
+        const round = await getCurrentRound(room.id, room.currentRound);
+        if (!round) throw new TRPCError({ code: "NOT_FOUND", message: "Round not found" });
+
+        const alreadyAnswered = await hasPlayerAnswered(round.id, input.sessionId);
+        if (alreadyAnswered) throw new TRPCError({ code: "BAD_REQUEST", message: "Already answered" });
+
+        await submitAnswer({
+          roundId: round.id,
+          roomId: room.id,
+          authorId: input.sessionId,
+          isAi: false,
+          answerText: input.answerText,
+        });
+
+        // Check if all human players have answered → generate AI answer and advance
+        const players = await getPlayersInRoom(room.id);
+        const answers = await getAnswersForRound(round.id);
+        const humanAnswerCount = answers.filter((a) => !a.isAi).length;
+
+        if (humanAnswerCount >= players.length) {
+          // Generate AI answer
+          const aiResponse = await invokeLLM({
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are playing a social deduction game. You are pretending to be a human player answering a personal question. Write a casual, authentic-sounding answer as if you were a real person. Keep it under 100 words. Do NOT use formal language, lists, or overly structured sentences. Sound like a real person typing quickly. Do not mention being an AI.",
+              },
+              {
+                role: "user",
+                content: `Answer this question naturally and briefly (under 100 words): ${round.question}`,
+              },
+            ],
+          });
+
+          const aiText =
+            (aiResponse as { choices?: Array<{ message?: { content?: string } }> })?.choices?.[0]?.message?.content ??
+            "I honestly don't know how to answer that one.";
+
+          await submitAnswer({
+            roundId: round.id,
+            roomId: room.id,
+            authorId: room.aiPlayerId,
+            isAi: true,
+            answerText: aiText,
+          });
+
+          // Advance to pointing phase
+          await updateRoundStatus(round.id, "pointing");
+          await updateGameRoomStatus(room.id, "pointing");
+        }
+
+        return { success: true };
+      }),
+
+    // Submit a pointing (suspicion) for the current round
+    submitPointing: publicProcedure
+      .input(
+        z.object({
+          roomCode: z.string(),
+          sessionId: z.string(),
+          suspectId: z.string(),
+          explanation: z.string().max(500).optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const room = await getGameRoomByCode(input.roomCode.toUpperCase());
+        if (!room) throw new TRPCError({ code: "NOT_FOUND", message: "Room not found" });
+        if (room.status !== "pointing") throw new TRPCError({ code: "BAD_REQUEST", message: "Not in pointing phase" });
+
+        const round = await getCurrentRound(room.id, room.currentRound);
+        if (!round) throw new TRPCError({ code: "NOT_FOUND", message: "Round not found" });
+
+        const alreadyPointed = await hasPlayerPointed(round.id, input.sessionId);
+        if (alreadyPointed) throw new TRPCError({ code: "BAD_REQUEST", message: "Already pointed" });
+
+        await submitPointing({
+          roundId: round.id,
+          roomId: room.id,
+          pointerId: input.sessionId,
+          suspectId: input.suspectId,
+          explanation: input.explanation ?? null,
+        });
+
+        // Check if all human players have pointed
+        const players = await getPlayersInRoom(room.id);
+        const pointings = await getPointingsForRound(round.id);
+
+        if (pointings.length >= players.length) {
+          // Advance to next round or voting
+          await updateRoundStatus(round.id, "done");
+
+          if (room.currentRound < TOTAL_ROUNDS) {
+            await updateGameRoomStatus(room.id, "question", room.currentRound + 1);
+          } else {
+            await updateGameRoomStatus(room.id, "voting");
+          }
+        }
+
+        return { success: true };
+      }),
+
+    // Submit final vote
+    submitVote: publicProcedure
+      .input(
+        z.object({
+          roomCode: z.string(),
+          sessionId: z.string(),
+          suspectId: z.string(),
+          explanation: z.string().max(500).optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const room = await getGameRoomByCode(input.roomCode.toUpperCase());
+        if (!room) throw new TRPCError({ code: "NOT_FOUND", message: "Room not found" });
+        if (room.status !== "voting") throw new TRPCError({ code: "BAD_REQUEST", message: "Not in voting phase" });
+
+        const alreadyVoted = await hasPlayerVoted(room.id, input.sessionId);
+        if (alreadyVoted) throw new TRPCError({ code: "BAD_REQUEST", message: "Already voted" });
+
+        await submitVote({
+          roomId: room.id,
+          voterId: input.sessionId,
+          suspectId: input.suspectId,
+          explanation: input.explanation ?? null,
+        });
+
+        // Check if all players voted
+        const players = await getPlayersInRoom(room.id);
+        const votes = await getVotesForRoom(room.id);
+
+        if (votes.length >= players.length) {
+          await updateGameRoomStatus(room.id, "results");
+        }
+
+        return { success: true };
+      }),
+  }),
+});
+
+export type AppRouter = typeof appRouter;
