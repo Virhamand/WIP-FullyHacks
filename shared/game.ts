@@ -19,4 +19,4 @@ export const MAX_WORDS = 250;
 export const TOTAL_ROUNDS = 3;
 
 // Increase this to allow more human players per room (max 7, one avatar slot is reserved for the AI).
-export const PLAYERS_PER_ROOM = 6;
+export const PLAYERS_PER_ROOM = 2;
