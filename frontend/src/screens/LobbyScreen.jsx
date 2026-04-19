@@ -16,20 +16,14 @@ export default function LobbyScreen({ roomCode, players, isHost, onStart }) {
           </div>
         </div>
 
-        {/* Players list */}
+        {/* Player count */}
         <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 space-y-4">
           <p className="text-xs font-mono tracking-widest text-slate-400 uppercase">
-            Players
+            Players joined
           </p>
-          <div className="space-y-3">
-            {players.map((player) => (
-              <div key={player.id} className="flex items-center justify-between py-2 border-b border-slate-700 last:border-0">
-                <span className="font-semibold">{player.name}</span>
-                <span className="text-xs bg-lime-400 text-slate-900 px-3 py-1 rounded-full font-bold">
-                  joined
-                </span>
-              </div>
-            ))}
+          <div className="text-center">
+            <div className="text-5xl font-black text-lime-400 mb-2">{players.length}</div>
+            <p className="text-slate-400">/ 2 players</p>
           </div>
           {!ready && (
             <div className="text-xs font-mono text-slate-500 text-center mt-4 animate-pulse">

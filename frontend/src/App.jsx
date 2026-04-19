@@ -208,6 +208,7 @@ export default function App() {
       )}
       {screen === 'reveal' && (
         <RevealScreen
+          question={gameState.question}
           round={gameState.round}
           answers={gameState.labelMap}
           selectedLabel={gameState.selectedLabel}

@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import { createServer } from "http";
 import { Server } from "socket.io";
 
@@ -94,10 +97,10 @@ function pickQuestion(usedQuestions = []) {
 
 // ---------------------------------------------------------------------------
 // AI answer generation
-// Calls the Claude API. Falls back to a stub if the key isn't set.
+// Calls the GEMINI API. Falls back to a stub if the key isn't set.
 // ---------------------------------------------------------------------------
 async function generateAiAnswer(question) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
     // Stub for local dev without an API key
@@ -105,31 +108,48 @@ async function generateAiAnswer(question) {
   }
 
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 120,
-        system: `You are a 20-something person casually answering a question in a group chat game.
-Rules:
-- Write 1-3 sentences max, under 60 words total.
-- Use casual, informal language. Contractions, filler words like "honestly", "kinda", "idk" are fine.
-- Occasionally be a little vague or trail off.
-- Do NOT use lists, bullet points, or formal structure.
-- Do NOT sound too articulate or polished. You're just a regular person typing quickly.
-- Do NOT mention being an AI or anything about technology.`,
-        messages: [{ role: "user", content: question }],
-      }),
-    });
+   const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: `You are a player in a spot in the imposter game in which you are trying to figure out which player among the other players are ai. Use 1 sentence. write towards the shorter side. no emojis. Use informal and imperfect grammar.
 
+question_example: do you have any regrets?
+example1: Plenty but honestly why waste energy on stuff you can't change
+example2:  wish i bought BTC instead of playing Clash of Clans
+ 
+Question: ${question}`,
+                },
+              ],
+            },
+          ],
+          generationConfig: {
+            maxOutputTokens: 300,
+            temperature: 1,
+          },
+        }),
+      }
+    );
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error("HTTP Error:", res.status, errText);
+      throw new Error("Request failed");
+    }
+ 
     const data = await res.json();
-    return data.content?.[0]?.text?.trim() ?? "i dunno, hard to say really";
-  } catch {
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    return text ?? "i dunno, hard to say really";
+  } catch (err) {
+    console.error("Gemini API error:", err);
     return "i dunno, hard to say really";
   }
 }

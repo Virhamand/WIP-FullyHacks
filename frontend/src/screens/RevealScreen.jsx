@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-export default function RevealScreen({ round, answers, selectedLabel, onSelect }) {
+export default function RevealScreen({ question, round, answers, selectedLabel, onSelect }) {
   const [timeLeft, setTimeLeft] = useState(20);
   const [submitted, setSubmitted] = useState(false);
 
@@ -44,6 +44,15 @@ export default function RevealScreen({ round, answers, selectedLabel, onSelect }
             style={{ width: `${progress}%` }}
           />
         </div>
+
+        
+        {/* Question */}
+        {question && (
+          <div className="bg-slate-800 border border-slate-700 rounded-lg p-5">
+            <p className="text-sm text-slate-400 mb-2">The question was:</p>
+            <p className="text-base font-semibold text-white">{question}</p>
+          </div>
+        )}
 
         {/* Header */}
         <div className="space-y-1">

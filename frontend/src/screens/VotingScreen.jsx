@@ -42,10 +42,12 @@ export default function VotingScreen({ players, selectedVoteId, onVote }) {
             </p>
           </div>
           <h3 className="text-2xl font-bold">Who is the AI?</h3>
-          <p className="text-sm text-slate-400">
-            This is your binding vote. Both players must vote for the same person to win.
-          </p>
         </div>
+
+        {/* Description */}
+        <p className="text-sm text-slate-400">
+          This is your binding vote. Both players must vote for the same person to win.
+        </p>
 
         {/* Vote options */}
         <div className="space-y-3">
