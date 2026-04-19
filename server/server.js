@@ -109,7 +109,8 @@ async function generateAiAnswer(question) {
 
   try {
    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+      //`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/modeey=${apiKey}`,
       {
         method: "POST",
         headers: {
