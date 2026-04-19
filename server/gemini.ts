@@ -1,15 +1,13 @@
 import { ENV } from "./_core/env";
 
-const GEMINI_API_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
-
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent"
 async function callGemini(prompt: string): Promise<string> {
   const res = await fetch(`${GEMINI_API_URL}?key=${ENV.geminiApiKey}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 300, temperature: 0.9 },
+      generationConfig: { maxOutputTokens: 200, temperature: 0.9 },
     }),
   });
 

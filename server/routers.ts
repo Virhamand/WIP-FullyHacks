@@ -95,7 +95,6 @@ export const appRouter = router({
           return { player: existing, room };
         }
 
-        // FIX: use PLAYERS_PER_ROOM constant so cap is driven by shared config
         if (existingPlayers.length >= PLAYERS_PER_ROOM) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Room is full" });
         }
@@ -185,7 +184,6 @@ export const appRouter = router({
                 roundNumber: currentRound.roundNumber,
                 question: currentRound.question,
                 status: currentRound.status,
-                // Include AI commentary if in pointing/done phase
                 aiCommentary: currentRound.aiCommentary ?? null,
               }
             : null,
@@ -205,13 +203,12 @@ export const appRouter = router({
           myAnswered,
           myPointed,
           myVoted,
-          // FIX: expose actual cap so client renders correctly
           playerCount: players.length,
           maxPlayers: PLAYERS_PER_ROOM,
         };
       }),
 
-    // Start the game — requires PLAYERS_PER_ROOM players
+    // Start the game — generates only the first question to save tokens
     startGame: publicProcedure
       .input(z.object({ roomCode: z.string(), sessionId: z.string() }))
       .mutation(async ({ input }) => {
@@ -220,7 +217,6 @@ export const appRouter = router({
         if (room.status !== "lobby") throw new TRPCError({ code: "BAD_REQUEST", message: "Game already started" });
 
         const players = await getPlayersInRoom(room.id);
-        // FIX: use PLAYERS_PER_ROOM so the guard matches the join cap
         if (players.length < PLAYERS_PER_ROOM) {
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -228,17 +224,14 @@ export const appRouter = router({
           });
         }
 
-        // Generate all round questions via Gemini (run in parallel for speed)
-        const questionPromises = Array.from({ length: TOTAL_ROUNDS }, () => generateQuestion());
-        const questions = await Promise.all(questionPromises);
-
-        for (let i = 0; i < TOTAL_ROUNDS; i++) {
-          await createGameRound({
-            roomId: room.id,
-            roundNumber: i + 1,
-            question: questions[i]!,
-          });
-        }
+        // Generate only round 1 question now — subsequent questions are
+        // generated after each pointing phase to minimize token usage.
+        const question = await generateQuestion();
+        await createGameRound({
+          roomId: room.id,
+          roundNumber: 1,
+          question,
+        });
 
         await updateGameRoomStatus(room.id, "question", 1);
         return { success: true };
@@ -279,7 +272,7 @@ export const appRouter = router({
         const humanAnswerCount = answers.filter((a) => !a.isAi).length;
 
         if (humanAnswerCount >= players.length) {
-          // ── Phase: Generate AI answer via Gemini ──────────────────────────
+          // ── Generate AI answer via Gemini ─────────────────────────────────
           const aiText = await generateAiAnswer(round.question);
 
           await submitAnswer({
@@ -290,11 +283,9 @@ export const appRouter = router({
             answerText: aiText || "Honestly not sure — I'd have to think on that one.",
           });
 
-          // ── Phase: All answers in → generate AI commentary ────────────────
-          // Fetch the full answer list (including the AI's just-submitted answer)
+          // ── All answers in → generate AI commentary ───────────────────────
           const allAnswers = await getAnswersForRound(round.id);
 
-          // Build participant name map for the commentary prompt
           const participantNames: Record<string, string> = {};
           for (const p of players) {
             participantNames[p.sessionId] = p.playerName;
@@ -308,10 +299,7 @@ export const appRouter = router({
 
           const commentary = await generateAiCommentary(round.question, responsesForCommentary);
 
-          // Persist commentary on the round so the frontend can display it
           await updateRoundStatus(round.id, "pointing", commentary || null);
-
-          // Advance game phase — everyone now sees the answers + AI comment
           await updateGameRoomStatus(room.id, "pointing");
         }
 
@@ -355,6 +343,15 @@ export const appRouter = router({
           await updateRoundStatus(round.id, "done", null);
 
           if (room.currentRound < TOTAL_ROUNDS) {
+            // ── Generate next round's question only now, after reactions ─────
+            // This is the key token-saving change: questions are generated
+            // one at a time, only after the previous round's reactions are shown.
+            const nextQuestion = await generateQuestion();
+            await createGameRound({
+              roomId: room.id,
+              roundNumber: room.currentRound + 1,
+              question: nextQuestion,
+            });
             await updateGameRoomStatus(room.id, "question", room.currentRound + 1);
           } else {
             await updateGameRoomStatus(room.id, "voting");

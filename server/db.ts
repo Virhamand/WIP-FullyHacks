@@ -1,5 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import path from "path";
 import {
   gameAnswers,
   gamePlayers,
@@ -9,17 +10,29 @@ import {
   gameVotes,
   InsertUser,
   users,
-} from "../../../../WIP-FullyHacks/drizzle/schema";
+} from "../drizzle/schema.ts";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
 export async function getDb() {
-  if (!_db && process.env.DATABASE_URL) {
+  if (!_db) {
+    const rootPath = process.cwd();
+    // Default to sqlite.db if the env var is missing or broken
+    let dbPath = (process.env.DATABASE_URL || "sqlite.db").replace("file:", "");
+    
+    if (!path.isAbsolute(dbPath)) {
+      dbPath = path.join(rootPath, dbPath);
+    }
+    
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      // Dynamically import better-sqlite3 to avoid startup issues
+      const Database = (await import('better-sqlite3')).default;
+      const sqlite = new Database(dbPath);
+      _db = drizzle(sqlite);
+      console.log(`[Database] Connection successful: ${dbPath}`);
     } catch (error) {
-      console.warn("[Database] Failed to connect:", error);
+      console.error("[Database] Failed to connect:", error);
       _db = null;
     }
   }
@@ -33,34 +46,31 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   const db = await getDb();
   if (!db) return;
 
-  const values: InsertUser = { openId: user.openId };
-  const updateSet: Record<string, unknown> = {};
-  const textFields = ["name", "email", "loginMethod"] as const;
+  const values: InsertUser = {
+    openId: user.openId,
+    name: user.name ?? null,
+    email: user.email ?? null,
+    loginMethod: user.loginMethod ?? null,
+    role: user.role ?? (user.openId === ENV.ownerOpenId ? "admin" : "user"),
+    lastSignedIn: user.lastSignedIn ?? new Date(),
+  };
 
-  for (const field of textFields) {
-    const value = user[field];
-    if (value === undefined) continue;
-    const normalized = value ?? null;
-    values[field] = normalized;
-    updateSet[field] = normalized;
-  }
+  const updateSet = {
+    name: values.name,
+    email: values.email,
+    loginMethod: values.loginMethod,
+    role: values.role,
+    lastSignedIn: values.lastSignedIn,
+    updatedAt: new Date(),
+  };
 
-  if (user.lastSignedIn !== undefined) {
-    values.lastSignedIn = user.lastSignedIn;
-    updateSet.lastSignedIn = user.lastSignedIn;
-  }
-  if (user.role !== undefined) {
-    values.role = user.role;
-    updateSet.role = user.role;
-  } else if (user.openId === ENV.ownerOpenId) {
-    values.role = "admin";
-    updateSet.role = "admin";
-  }
-
-  if (!values.lastSignedIn) values.lastSignedIn = new Date();
-  if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
-
-  await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
+  await db
+    .insert(users)
+    .values(values)
+    .onConflictDoUpdate({
+      target: users.openId,
+      set: updateSet,
+    });
 }
 
 export async function getUserByOpenId(openId: string) {
@@ -106,7 +116,7 @@ export async function updateGameRoomStatus(
 ) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
-  const updateData: Record<string, unknown> = { status };
+  const updateData: Record<string, any> = { status };
   if (currentRound !== undefined) updateData.currentRound = currentRound;
   await db.update(gameRooms).set(updateData).where(eq(gameRooms.id, roomId));
 }
@@ -188,7 +198,7 @@ export async function updateRoundStatus(
 ) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
-  const update: Record<string, unknown> = { status };
+  const update: Record<string, any> = { status };
   if (aiCommentary !== undefined) update.aiCommentary = aiCommentary;
   await db.update(gameRounds).set(update).where(eq(gameRounds.id, roundId));
 }
@@ -297,8 +307,8 @@ export async function getFullGameState(roomCode: string) {
   const players = await getPlayersInRoom(room.id);
   const rounds = await db.select().from(gameRounds).where(eq(gameRounds.roomId, room.id));
 
-  const allAnswers: Record<number, Awaited<ReturnType<typeof getAnswersForRound>>> = {};
-  const allPointings: Record<number, Awaited<ReturnType<typeof getPointingsForRound>>> = {};
+  const allAnswers: Record<number, any> = {};
+  const allPointings: Record<number, any> = {};
 
   for (const round of rounds) {
     allAnswers[round.id] = await getAnswersForRound(round.id);
