@@ -1,17 +1,17 @@
 import google.generativeai as genai
-import json
-import random
+from dotenv import load_dotenv # You may need to run: pip install python-dotenv
 
-genai.configure(api_key="AIzaSyCyG-9vNTOsVEkcnZ6yZTVRyJfRh86Zuxo")
+# Load variables from .env
+load_dotenv()
+
+# Get the key from the environment
+api_key = os.getenv("GEMINI_API_KEY")
+
+if not api_key:
+    raise ValueError("GEMINI_API_KEY not found in .env file")
+
+genai.configure(api_key=api_key)
 model = genai.GenerativeModel("gemini-2.0-flash")
-
-
-# ── Shared game store (frontend can read/write this dict) ──────────────────────
-game_store = {
-    "question": None,       # str
-    "responses": [],        # [{"name": str, "text": str, "is_ai": bool}]
-    "ai_commentary": None,  # str | None — populated after analysis phase
-}
 
 
 # ── 1. QUESTION GENERATION ─────────────────────────────────────────────────────
